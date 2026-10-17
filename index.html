@@ -777,7 +777,7 @@ function freshState(o={}){
  s.log=[{text:`${s.realmName} sancağı ${city.name} şehrinde yükseldi. ${s.people[0].name}, ${age} yaşında tahta çıktı.`,type:'crown',year:1000,season:0},{text:'Evlilik ve çocuk kararları hükümdara ait. Hanedan defteri yeni isimleri bekliyor.',type:'state',year:1000,season:0},{text:'Atlas açıldı. İstersen bir şehir/il seçerek fethet, istersen kendi sınırını çiz.',type:'world',year:1000,season:0}];
  s.succession=[{id:1,name:s.people[0].name,start:1000,end:null}];return s;
 }
-function persist(){if(!S||S.setupPending){$('#saved-status').textContent=NET.active?'Online · yeni başlangıç':'Yeni başlangıç';return;}S.savedAt=Date.now();try{localStorage.setItem(NET.active?netSaveKey():SAVE_KEY,JSON.stringify(S));$('#saved-status').innerHTML=NET.active?'<i></i> Online · kayıt güncel':'<i></i> Kayıt güncel';}catch(e){$('#saved-status').innerHTML='İndirerek kaydet';}if(NET.active)netPublishStats();}
+function persist(){if(!S||S.setupPending){$('#saved-status').textContent=NET.active?'Online · yeni başlangıç':'Yeni başlangıç';return;}S.savedAt=Date.now();try{localStorage.setItem(NET.active?netSaveKey():SAVE_KEY,JSON.stringify(NET.active?netPersistable():S));$('#saved-status').innerHTML=NET.active?'<i></i> Online · kayıt güncel':'<i></i> Kayıt güncel';}catch(e){$('#saved-status').innerHTML='İndirerek kaydet';}if(NET.active)netPublishStats();}
 function validateSave(s){
  s=upgradeSave(s);
  if(!s||s.version!==3||!Number.isSafeInteger(s.year)||s.year<1000||!Number.isInteger(s.season)||s.season<0||s.season>3)throw Error('Bu dosya geçerli bir Devir kaydı değil.');
@@ -1682,7 +1682,8 @@ async function netLoadSdk(){
  return fb();
 }
 function netLocalUid(){let id=netRead(NET_KEYS.id,false);if(!netKeyOk(id)){const a='abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';id='L';for(const x of crypto.getRandomValues(new Uint8Array(19)))id+=a[x%a.length];netStore(NET_KEYS.id,id);}return id;}
-async function netConnect(){
+function netConnect(){if(NET.db)return Promise.resolve();return NET.connecting??=netConnectNow().finally(()=>{NET.connecting=null;});}
+async function netConnectNow(){
  if(NET.db)return;const cfg=netConfig();if(!cfg)throw Error('Önce Firebase ayarını gir.');
  const fb=await netLoadSdk(),app=fb.apps.find(a=>a.name==='devir')||fb.initializeApp(cfg,'devir');
  let uid=null;
@@ -1752,12 +1753,12 @@ function netAfterLandChange(){
  if(shareOf(P[S.capital])<=0){const next=owned.filter(p=>Number.isInteger(p.seat)&&CITIES[p.seat]?.pid===p.id).sort((a,b)=>b.km2*shareOf(b)-a.km2*shareOf(a))[0];if(next){S.capital=next.id;S.capitalCity=next.seat;log(`Başkent düştü. Devletin merkezi ${next.name} bölgesine taşındı.`,'world');toast(`Başkent düştü! Yeni başkent: ${next.name}.`,'error');}}
  persist();render();netScheduleMap();
 }
-function netRefreshPicker(){const sel=$('#new-birth-city');if(!sel)return;const old=Number(sel.value);filterStartCities($('#new-city-search')?.value||'');if(Number.isInteger(old)&&CITIES[old]&&netTaken(CITIES[old].pid))toast(`${CITIES[old].name} az önce başka bir oyuncuya geçti. Başka bir şehir seç.`,'error');}
+function netRefreshPicker(){const sel=$('#new-birth-city');if(!sel)return;const old=Number(sel.value);filterStartCities($('#new-city-search')?.value||'');if(Number.isInteger(old)&&CITIES[old]&&netTaken(CITIES[old].pid)){NET.pickerChangedAt=Date.now();toast(`${CITIES[old].name} az önce başka bir oyuncuya geçti. Başka bir şehir seç.`,'error');}}
 function netScheduleMap(){if(NET.mapTimer)return;NET.mapTimer=requestAnimationFrame(()=>{NET.mapTimer=0;if(S)updateMap();});}
 
 // ── Yerel değişiklikleri yayınla (çakışmaya dayanıklı işlemler) ─────────────
 function netMarkDirty(pid){if(!NET.active||NET.applying||!NET.landReady||!NET.db||S.setupPending)return;NET.dirty.add(Number(pid));clearTimeout(NET.flushTimer);NET.flushTimer=setTimeout(netFlush,60);}
-function netFlush(){if(!NET.active||!NET.db)return;const pids=[...NET.dirty];NET.dirty.clear();for(const pid of pids)netPublishProvince(pid);}
+function netFlush(){if(!NET.active||!NET.db)return;for(const pid of [...NET.dirty]){if(NET.inflight.has(pid))continue;NET.dirty.delete(pid);netPublishProvince(pid);}}
 function netRegisterCaptures(c){if(!NET.active||!c.pvp)return;for(const t of c.targets){if(!netIsRemote(t.owner))continue;const list=NET.captures.get(t.pid)||[];list.push({uid:t.owner.slice(4),g:t.g});NET.captures.set(t.pid,list);}}
 async function netPublishProvince(pid){
  const p=P[pid],room=NET.room,me=NET.uid;if(!p||!room)return;NET.inflight.add(pid);
@@ -1775,7 +1776,7 @@ async function netPublishProvince(pid){
    return JSON.stringify(next)===JSON.stringify(cur??null)?undefined:next;
   },undefined,false);
  }catch(e){netNotifyError(e);}
- finally{NET.inflight.delete(pid);if(NET.active&&NET.room===room&&!NET.dirty.has(pid)&&!NET.inflight.has(pid)){netApplyLand(pid);netQueueAfterLand();}}
+ finally{NET.inflight.delete(pid);if(NET.active&&NET.room===room){if(NET.dirty.has(pid)){clearTimeout(NET.flushTimer);NET.flushTimer=setTimeout(netFlush,0);}else{netApplyLand(pid);netQueueAfterLand();}}}
 }
 async function netReleaseRoom(room,uid){
  const snap=await netWait(NET.db.ref(`rooms/${room}/land`).once('value'),15000,'Oda haritası alınamadı.'),land=snap.val()||{},jobs=[];
@@ -1850,6 +1851,8 @@ function netStripRemote(s){
  return s;
 }
 function netLoadState(s){return validateSave(netStripRemote(s));}
+// Online kayıtlar yalnız kendi parçalarını taşır; diğer oyuncuların toprakları açılışta veritabanından gelir.
+function netPersistable(){const land={},owners=S.owners.slice();for(const [pid,parts]of Object.entries(S.land)){if(parts.some(a=>a.owner==='player'))land[pid]=parts;else owners[pid]=netAiOwner(Number(pid));}for(let i=0;i<owners.length;i++)if(netIsRemote(owners[i])&&!land[i])owners[i]=P[i].realm;return{...S,owners,land};}
 async function netCreateRoom(){
  if(!netSaveName())return;const name=netText($('#online-room-name')?.value,30,`${NET.name} odası`),speedValue=Number($('#online-room-speed')?.value),seasonMs=NET_SPEEDS.includes(speedValue)?speedValue:4500;
  await netBusy('Oda kuruluyor…',async()=>{
@@ -1901,6 +1904,7 @@ async function netStartGame(){
  if(!Number.isInteger(age)||age<20||age>29)return toast('Başlangıç yaşını 20 ile 29 arasında seç.','error');
  const city=CITIES.find(c=>c.id===birthCity);if(!city||!startCities(empire).some(c=>c.id===birthCity))return toast('Seçtiğin imparatorlukta bir doğum şehri seç.','error');
  if(netTaken(city.pid))return toast('Bu şehir dolu. Boş bir şehir seç.','error');
+ if(Date.now()-(NET.pickerChangedAt||0)<2500)return toast('Seçtiğin şehir doldu. Listeden yeni şehrini kontrol edip yeniden başlat.','error');
  if(!NET.name)NET.name=netText(netRead(NET_KEYS.name,false),20,founder.slice(0,20));
  await netBusy('Şehir sancağın için ayrılıyor…',async()=>{
   const me=NET.uid,ids=netStartIds({empire,birthCity,extent}),claim=pid=>netRef('land/'+netLandKey(pid)).transaction(cur=>cur?undefined:{w:me},undefined,false).then(r=>r.committed).catch(()=>false);
