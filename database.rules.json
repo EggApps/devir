@@ -1,0 +1,48 @@
+{
+  "rules": {
+    "lobby": {
+      ".read": "auth != null",
+      ".indexOn": ["active"],
+      "$room": {
+        ".write": "auth != null && (!data.exists() || data.child('by').val() === auth.uid)",
+        "active": { ".write": "auth != null", ".validate": "newData.isNumber()" },
+        "players": {
+          "$uid": { ".write": "auth != null && auth.uid === $uid" }
+        }
+      }
+    },
+    "rooms": {
+      "$room": {
+        ".read": "auth != null",
+        "meta": {
+          ".write": "auth != null && !data.exists()",
+          ".validate": "newData.hasChildren(['name', 'startAt', 'seasonMs'])"
+        },
+        "players": {
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid",
+            "dmg": {
+              ".write": "auth != null && data.parent().child('realm').exists()",
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            }
+          }
+        },
+        "land": {
+          "$pid": {
+            ".write": "auth != null",
+            ".validate": "newData.child('w').isString() || newData.child('p').hasChildren()"
+          }
+        },
+        "inbox": {
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid",
+            "$msg": { ".write": "auth != null && !data.exists()" }
+          }
+        },
+        "news": {
+          "$id": { ".write": "auth != null && !data.exists()" }
+        }
+      }
+    }
+  }
+}
